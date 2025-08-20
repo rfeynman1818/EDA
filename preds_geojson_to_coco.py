@@ -13,15 +13,11 @@ def image_key(meta):
     return img.get("id") or src.get("filename") or "unknown"
 
 def first_ring(geom):
-    # Prefer pixel-space 'image_coordinates'
-    ic = (geom or {}).get("image_coordinates")
+    ic=(geom or {}).get("image_coordinates")
     if ic:
-        # Accept shapes: [ [x,y], ... ]  OR  [ [ [x,y], ... ] ]  OR deeper MultiPolygon-like
         if ic and ic[0] and isinstance(ic[0][0], (int,float)): return ic
-        if ic and ic[0] and isinstance(ic[0][0], list) and ic[0][0] and isinstance(ic[0][0][0], (int,float)):
-            return ic[0]
+        if ic and ic[0] and isinstance(ic[0][0], list) and ic[0][0] and isinstance(ic[0][0][0], (int,float)): return ic[0]
         if isinstance(ic[0], list): return ic[0]
-    # Fallback to geographic coords if needed
     coords=(geom or {}).get("coordinates") or []
     t=(geom or {}).get("type","")
     if t=="Polygon" and coords: return coords[0]
@@ -51,13 +47,10 @@ def main():
         return props.get("classification") if props.get("classification") is not None else props.get("label")
 
     default_key=image_key(file_meta)
-    img2id.setdefault(default_key, next_img); next_img+=1
+    if default_key not in img2id: img2id[default_key]=next_img; next_img+=1
 
     for f in feats:
-        props=f.get("properties",{})
-        geom =f.get("geometry",{})
-        meta =f.get("metadata") or file_meta
-
+        props=f.get("properties",{}); geom=f.get("geometry",{}); meta=f.get("metadata") or file_meta
         ik=image_key(meta) or default_key
         if ik not in img2id: img2id[ik]=next_img; next_img+=1
         img_id=img2id[ik]
@@ -75,9 +68,9 @@ def main():
         preds.append({"image_id":img_id,"category_id":cid,"bbox":[x,y,w,h],"score":score})
 
     json.dump(preds, open(out_dir/"preds.json","w"), indent=2)
-    json.dump({"image_id_map": img2id,
-               "category_id_map": {str(k):v for k,v in cat2id.items()}},
+    json.dump({"image_id_map": img2id, "category_id_map": {str(k):v for k,v in cat2id.items()}},
               open(out_dir/"mappings.json","w"), indent=2)
+    print(f"[preds→coco] detections:{len(preds)} → {out_dir}/preds.json; maps → {out_dir}/mappings.json")
 
 if __name__=="__main__":
     main()
