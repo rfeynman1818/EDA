@@ -129,18 +129,14 @@ def summarize(args):
     if args.render_dir:
         rdir=Path(args.render_dir); rdir.mkdir(parents=True, exist_ok=True)
         font=safe_font(14); palette={"TP":"green","FP":"red","FN":"orange"}
-        # Rebuild lookups once
-        def recon(image_id):
-            gt_objs=gts_by_img.get(image_id,[]); pred_objs=preds_by_img.get(image_id,[])
-            matches,_,_,_=match_per_image(gt_objs,pred_objs,args.iou_thr)
-            matched_gt=set(id(g) for _,g,_ in matches); matched_pred=set(id(p) for p,_,_ in matches)
-            return gt_objs,pred_objs,matched_gt,matched_pred
         for r in ranked[:args.top_k]:
             image_id=r["image_id"]; file_name=(img_by_id.get(image_id,{}) or {}).get("file_name")
             if not file_name: continue
             img_path=Path(args.images_root)/file_name
             if not img_path.exists(): continue
-            gt_objs,pred_objs,matched_gt,matched_pred=recon(image_id)
+            gt_objs=gts_by_img.get(image_id,[]); pred_objs=preds_by_img.get(image_id,[])
+            matches,_,_,_=match_per_image(gt_objs,pred_objs,args.iou_thr)
+            matched_gt=set(id(g) for _,g,_ in matches); matched_pred=set(id(p) for p,_,_ in matches)
             im=Image.open(img_path).convert("RGB"); draw=ImageDraw.Draw(im)
             for p in pred_objs:
                 tag="TP" if id(p) in matched_pred else "FP"
@@ -166,4 +162,3 @@ if __name__=="__main__":
     ap.add_argument("--top_k", type=int, default=50)
     ap.add_argument("--confusion_csv", default="")
     args=ap.parse_args(); summarize(args)
-
