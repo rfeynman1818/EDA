@@ -1,6 +1,7 @@
-# analyze.py
-import json, csv, argparse, collections
+# analyze.py  (NITF-aware overlays via GDAL; graceful fallback)
+import json, csv, argparse, collections, os
 from pathlib import Path
+import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
 def iou_xywh(a, b):
@@ -42,6 +43,54 @@ def prf(tp,fp,fn):
     f1  =2*prec*rec/(prec+rec) if prec+rec>0 else 0.0
     return prec,rec,f1
 
+# ---------- NITF-aware image loader (GDAL optional) ----------
+def _stretch_to_8bit(arr):
+    arr = arr.astype(np.float32)
+    vmin, vmax = np.percentile(arr, 2), np.percentile(arr, 98)
+    if vmax <= vmin:
+        vmin, vmax = float(arr.min()), float(arr.max())
+    if vmax <= vmin:
+        vmax = vmin + 1.0
+    arr = (arr - vmin) * (255.0 / (vmax - vmin))
+    return np.clip(arr, 0, 255).astype(np.uint8)
+
+def open_image_for_overlay(path):
+    """
+    Returns a PIL.Image RGB or None if the file cannot be opened.
+    Supports: common raster formats via Pillow; NITF via GDAL if available.
+    """
+    p = Path(path)
+    suffix = p.suffix.lower()
+    if suffix in (".nitf", ".ntf"):
+        try:
+            from osgeo import gdal
+        except Exception:
+            return None  # GDAL not installed/usable
+        ds = gdal.Open(str(p))
+        if ds is None: return None
+        bands = ds.RasterCount
+        if bands >= 3:
+            ch = []
+            for b in (1,2,3):
+                band = ds.GetRasterBand(b)
+                arr = band.ReadAsArray()
+                if arr is None: return None
+                ch.append(_stretch_to_8bit(arr))
+            rgb = np.dstack(ch[:3])
+        else:
+            band = ds.GetRasterBand(1)
+            arr = band.ReadAsArray()
+            if arr is None: return None
+            g = _stretch_to_8bit(arr)
+            rgb = np.dstack([g,g,g])
+        return Image.fromarray(rgb, "RGB")
+    # Non-NITF: let Pillow handle
+    try:
+        return Image.open(p).convert("RGB")
+    except Exception:
+        return None
+# -------------------------------------------------------------
+
 def summarize(args):
     gt=json.load(open(args.gt_json))
     preds=json.load(open(args.pred_json))
@@ -75,14 +124,22 @@ def summarize(args):
             per_class_tp[cname(g["category_id"])]+=1
         for i,p in enumerate(pred_objs):
             per_class_pred[cname(p["category_id"])]+=1
-            if i not in matched_pred_idx: class_fp[cname(p["category_id"])]+=1; conf_fp[(cname(p["category_id"]), "BG")]+=1
+            if i not in matched_pred_idx:
+                class_fp[cname(p["category_id"])] += 1
+                conf_fp[(cname(p["category_id"]), "BG")] += 1
         for i,g in enumerate(gt_objs):
             per_class_gt[cname(g["category_id"])] += 1
-            if i not in matched_gt_idx: class_fn[cname(g["category_id"])] += 1; conf_fn[("BG",cname(g["category_id"]))]+=1
+            if i not in matched_gt_idx:
+                class_fn[cname(g["category_id"])] += 1
+                conf_fn[("BG",cname(g["category_id"]))] += 1
         prec,rec,f1=prf(tp,fp,fn)
-        per_image.append({"image_id":image_id,"file_name":img_by_id.get(image_id,{}).get("file_name",str(image_id)),
-                          "tp":tp,"fp":fp,"fn":fn,"precision":round(prec,4),"recall":round(rec,4),"f1":round(f1,4),
-                          "num_gt":len(gt_objs),"num_pred":len(pred_objs)})
+        per_image.append({
+            "image_id":image_id,
+            "file_name":img_by_id.get(image_id,{}).get("file_name",str(image_id)),
+            "tp":tp,"fp":fp,"fn":fn,
+            "precision":round(prec,4),"recall":round(rec,4),"f1":round(f1,4),
+            "num_gt":len(gt_objs),"num_pred":len(pred_objs)
+        })
 
     out_dir=Path(args.out_dir); out_dir.mkdir(parents=True, exist_ok=True)
     fields=["image_id","file_name","tp","fp","fn","precision","recall","f1","num_gt","num_pred"]
@@ -99,54 +156,75 @@ def summarize(args):
     with open(out_dir/"worst_images.csv","w",newline="") as f:
         w=csv.DictWriter(f, fieldnames=fields); w.writeheader(); w.writerows(ranked[:args.top_k])
 
-    total_tp=sum(r["tp"] for r in per_image); total_fp=sum(r["fp"] for r in per_image); total_fn=sum(r["fn"] for r in per_image)
+    total_tp=sum(r["tp"] for r in per_image)
+    total_fp=sum(r["fp"] for r in per_image)
+    total_fn=sum(r["fn"] for r in per_image)
     g_prec,g_rec,g_f1=prf(total_tp,total_fp,total_fn)
 
     rows=[]
     for c in sorted(set(list(per_class_gt.keys())+list(per_class_pred.keys()))):
         tp=per_class_tp[c]; fp=class_fp[c]; fn=class_fn[c]
         pc,rc,f1=prf(tp,fp,fn)
-        rows.append({"class":c,"tp":tp,"fp":fp,"fn":fn,"precision":round(pc,4),"recall":round(rc,4),
-                     "f1":round(f1,4),"gt":per_class_gt[c],"pred":per_class_pred[c]})
+        rows.append({"class":c,"tp":tp,"fp":fp,"fn":fn,"precision":round(pc,4),
+                     "recall":round(rc,4),"f1":round(f1,4),
+                     "gt":per_class_gt[c],"pred":per_class_pred[c]})
     with open(out_dir/"per_class_metrics.csv","w",newline="") as f:
         w=csv.DictWriter(f, fieldnames=list(rows[0].keys()) if rows else
                          ["class","tp","fp","fn","precision","recall","f1","gt","pred"])
         w.writeheader(); w.writerows(rows)
 
-    obs={"total_images":len(per_image),"total_gt":sum(r["num_gt"] for r in per_image),
-         "total_preds":sum(r["num_pred"] for r in per_image),"total_tp":total_tp,"total_fp":total_fp,"total_fn":total_fn,
+    obs={"total_images":len(per_image),
+         "total_gt":sum(r["num_gt"] for r in per_image),
+         "total_preds":sum(r["num_pred"] for r in per_image),
+         "total_tp":total_tp,"total_fp":total_fp,"total_fn":total_fn,
          "global_precision":round(g_prec,4),"global_recall":round(g_rec,4),"global_f1":round(g_f1,4),
          "fp_by_class":collections.Counter(class_fp).most_common(),
          "fn_by_class":collections.Counter(class_fn).most_common()}
     json.dump(obs, open(out_dir/"observations.json","w"), indent=2)
 
     if args.confusion_csv:
-        rows=[{"section":"FP","pred_class":k[0],"gt_class":k[1],"count":v} for k,v in conf_fp.items()]
-        rows+=[{"section":"FN","pred_class":k[0],"gt_class":k[1],"count":v} for k,v in conf_fn.items()]
+        rows = [{"section":"FP","pred_class":k[0],"gt_class":k[1],"count":v} for k,v in conf_fp.items()]
+        rows+= [{"section":"FN","pred_class":k[0],"gt_class":k[1],"count":v} for k,v in conf_fn.items()]
         with open(out_dir/args.confusion_csv,"w",newline="") as f:
-            w=csv.DictWriter(f, fieldnames=["section","pred_class","gt_class","count"]); w.writeheader(); w.writerows(rows)
+            w=csv.DictWriter(f, fieldnames=["section","pred_class","gt_class","count"])
+            w.writeheader(); w.writerows(rows)
 
     if args.render_dir:
         rdir=Path(args.render_dir); rdir.mkdir(parents=True, exist_ok=True)
         font=safe_font(14); palette={"TP":"green","FP":"red","FN":"orange"}
+
         for r in ranked[:args.top_k]:
-            image_id=r["image_id"]; file_name=(img_by_id.get(image_id,{}) or {}).get("file_name")
+            image_id=r["image_id"]
+            file_name=(img_by_id.get(image_id, {}) or {}).get("file_name")
             if not file_name: continue
-            img_path=Path(args.images_root)/file_name
+
+            # absolute paths in GT take precedence; otherwise join with images_root
+            img_path = Path(file_name) if os.path.isabs(file_name) else Path(args.images_root)/file_name
             if not img_path.exists(): continue
+
             gt_objs=gts_by_img.get(image_id,[]); pred_objs=preds_by_img.get(image_id,[])
             matches,_,_,_=match_per_image(gt_objs,pred_objs,args.iou_thr)
             matched_gt=set(id(g) for _,g,_ in matches); matched_pred=set(id(p) for p,_,_ in matches)
-            im=Image.open(img_path).convert("RGB"); draw=ImageDraw.Draw(im)
+
+            im = open_image_for_overlay(img_path)
+            if im is None:  # can’t open (no GDAL or bad path) → skip rendering
+                continue
+
+            draw=ImageDraw.Draw(im)
             for p in pred_objs:
                 tag="TP" if id(p) in matched_pred else "FP"
                 draw_box(draw, p["bbox"], palette[tag], 3)
-                x,y,w,h=p["bbox"]; draw.text((x, max(0,y-16)), f"{tag} {cname(p['category_id'])} {p['score']:.2f}", fill=palette[tag], font=font)
+                x,y,w,h=p["bbox"]
+                draw.text((x, max(0,y-16)), f"{tag} {cname(p['category_id'])} {p['score']:.2f}",
+                          fill=palette[tag], font=font)
             for g in gt_objs:
                 if id(g) not in matched_gt:
                     draw_box(draw, g["bbox"], palette["FN"], 2)
-                    x,y,w,h=g["bbox"]; draw.text((x, max(0,y-16)), f"FN {cname(g['category_id'])}", fill=palette["FN"], font=font)
-            out_name=f"{int(image_id):012d}_overlay.png" if isinstance(image_id,int) else f"{str(image_id)}_overlay.png"
+                    x,y,w,h=g["bbox"]
+                    draw.text((x, max(0,y-16)), f"FN {cname(g['category_id'])}",
+                              fill=palette["FN"], font=font)
+
+            out_name = f"{int(image_id):012d}_overlay.png" if isinstance(image_id,int) else f"{str(image_id)}_overlay.png"
             im.save(rdir/out_name)
 
 if __name__=="__main__":
@@ -161,4 +239,6 @@ if __name__=="__main__":
     ap.add_argument("--rank_by", choices=["f1","errors"], default="errors")
     ap.add_argument("--top_k", type=int, default=50)
     ap.add_argument("--confusion_csv", default="")
-    args=ap.parse_args(); summarize(args)
+    args=ap.parse_args()
+    summarize(args)
+
