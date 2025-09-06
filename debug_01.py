@@ -46,3 +46,40 @@ def test_detection_click_manually(click_x, click_y):
 # Test with some coordinates from your image
 # Try coordinates near the center of your image
 test_detection_click_manually(16000, 16000)  # Adjust these numbers based on your image size
+
+###########################################################################
+
+# First, let's check what event handlers are currently connected
+print("Current event handlers:")
+for key, value in fig.canvas.callbacks.callbacks.items():
+    print(f"{key}: {len(value)} handlers")
+
+
+# Then, manually reconnect the click handler properly:
+
+# Disconnect any existing handlers and reconnect properly
+fig.canvas.mpl_disconnect('button_press_event')
+
+# Reconnect with a direct test
+def fixed_click_handler(event):
+    print(f"Click detected at: {event.xdata}, {event.ydata}")
+    
+    if event.inaxes is None or event.xdata is None or event.ydata is None:
+        print("Click outside plot area")
+        return
+    
+    click_x, click_y = event.xdata, event.ydata
+    
+    # Find clicked detection
+    for det_id, det_info in current_detections.items():
+        bbox = det_info['bbox']
+        if bbox[0] <= click_x <= bbox[2] and bbox[1] <= click_y <= bbox[3]:
+            print(f"Found detection {det_id}!")
+            show_detection_details(det_id, det_info)
+            return
+    
+    print("No detection found at click location")
+
+# Connect the fixed handler
+cid = fig.canvas.mpl_connect('button_press_event', fixed_click_handler)
+print(f"Connected handler with ID: {cid}")
