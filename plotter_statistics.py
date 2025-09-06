@@ -179,3 +179,146 @@ ax2.set_ylabel('Y coordinate')
 
 plt.tight_layout()
 plt.show()
+
+###############################################################
+
+# 1. Which classes have the most errors
+
+# Count errors by class
+error_df = df[df['detection_type'].isin(['unmatched_detection', 'unmatched_annotation'])]
+
+print("Errors by Class:")
+class_errors = error_df['class_name'].value_counts()
+print(class_errors)
+
+# Show error breakdown by type
+error_breakdown = df.groupby(['class_name', 'detection_type']).size().unstack(fill_value=0)
+print("\nError Breakdown by Class:")
+print(error_breakdown)
+
+# Calculate error rates
+tp_by_class = df[df['detection_type'] == 'matched_detection']['class_name'].value_counts()
+total_by_class = df['class_name'].value_counts()
+
+print("\nError Rate by Class:")
+for class_name in total_by_class.index:
+    total = total_by_class[class_name]
+    errors = class_errors.get(class_name, 0)
+    error_rate = errors / total * 100
+    print(f"{class_name}: {errors}/{total} = {error_rate:.1f}% error rate")
+
+###############################################################
+
+# 2. Low confidence vs false positives correlation
+
+# Analyze confidence scores for FPs vs TPs
+tp_df = df[df['detection_type'] == 'matched_detection']
+fp_df = df[df['detection_type'] == 'unmatched_detection']
+
+print("Confidence Score Analysis:")
+print(f"TP average confidence: {tp_df['confidence_score'].mean():.3f}")
+print(f"FP average confidence: {fp_df['confidence_score'].mean():.3f}")
+
+# Count low confidence detections
+low_conf_threshold = 0.5
+tp_low_conf = len(tp_df[tp_df['confidence_score'] < low_conf_threshold])
+fp_low_conf = len(fp_df[fp_df['confidence_score'] < low_conf_threshold])
+
+print(f"\nLow confidence (<{low_conf_threshold}) breakdown:")
+print(f"TPs with low confidence: {tp_low_conf}/{len(tp_df)} = {tp_low_conf/len(tp_df)*100:.1f}%")
+print(f"FPs with low confidence: {fp_low_conf}/{len(fp_df)} = {fp_low_conf/len(fp_df)*100:.1f}%")
+
+# Show confidence distribution
+import matplotlib.pyplot as plt
+plt.figure(figsize=(10, 6))
+plt.hist(tp_df['confidence_score'], bins=20, alpha=0.6, label='True Positives', color='green')
+plt.hist(fp_df['confidence_score'], bins=20, alpha=0.6, label='False Positives', color='red')
+plt.xlabel('Confidence Score')
+plt.ylabel('Count')
+plt.title('Confidence Score Distribution: TP vs FP')
+plt.legend()
+plt.show()
+
+###############################################################
+
+# 3. Missed objects size analysis
+
+# Analyze size of missed objects (FNs)
+fn_df = df[df['detection_type'] == 'unmatched_annotation']
+tp_df = df[df['detection_type'] == 'matched_detection']
+
+# Calculate areas
+fn_df = fn_df.copy()
+fn_df['bbox_area'] = fn_df['bbox_width'] * fn_df['bbox_height']
+tp_df = tp_df.copy()
+tp_df['bbox_area'] = tp_df['bbox_width'] * tp_df['bbox_height']
+
+print("Object Size Analysis:")
+print(f"Average FN (missed) object area: {fn_df['bbox_area'].mean():.1f}")
+print(f"Average TP (detected) object area: {tp_df['bbox_area'].mean():.1f}")
+
+# Size percentiles
+print(f"\nFN size percentiles:")
+print(fn_df['bbox_area'].describe())
+
+print(f"\nTP size percentiles:")
+print(tp_df['bbox_area'].describe())
+
+# Small object analysis
+small_threshold = fn_df['bbox_area'].quantile(0.25)  # Bottom 25%
+small_fn = len(fn_df[fn_df['bbox_area'] <= small_threshold])
+small_tp = len(tp_df[tp_df['bbox_area'] <= small_threshold])
+
+print(f"\nSmall objects (area <= {small_threshold:.1f}):")
+print(f"Small FNs: {small_fn}/{len(fn_df)} = {small_fn/len(fn_df)*100:.1f}%")
+print(f"Small TPs: {small_tp}/{len(tp_df)} = {small_tp/len(tp_df)*100:.1f}%")
+
+###############################################################
+
+# 4. Spatial clustering analysis
+
+# Analyze spatial distribution of errors
+import numpy as np
+
+# Calculate image quadrants
+x_mid = df['bbox_x_min'].median()
+y_mid = df['bbox_y_min'].median()
+
+def get_quadrant(row):
+    if row['bbox_x_min'] <= x_mid and row['bbox_y_min'] <= y_mid:
+        return 'Top-Left'
+    elif row['bbox_x_min'] > x_mid and row['bbox_y_min'] <= y_mid:
+        return 'Top-Right'
+    elif row['bbox_x_min'] <= x_mid and row['bbox_y_min'] > y_mid:
+        return 'Bottom-Left'
+    else:
+        return 'Bottom-Right'
+
+df['quadrant'] = df.apply(get_quadrant, axis=1)
+
+print("Spatial Distribution Analysis:")
+print("\nErrors by Image Quadrant:")
+error_by_quad = df[df['detection_type'].isin(['unmatched_detection', 'unmatched_annotation'])]['quadrant'].value_counts()
+total_by_quad = df['quadrant'].value_counts()
+
+for quad in total_by_quad.index:
+    errors = error_by_quad.get(quad, 0)
+    total = total_by_quad[quad]
+    print(f"{quad}: {errors}/{total} = {errors/total*100:.1f}% errors")
+
+# Distance from center analysis
+center_x = df['bbox_x_min'].median()
+center_y = df['bbox_y_min'].median()
+
+df['distance_from_center'] = np.sqrt((df['bbox_x_min'] - center_x)**2 + (df['bbox_y_min'] - center_y)**2)
+
+# Compare error rates by distance from center
+df['distance_category'] = pd.cut(df['distance_from_center'], bins=3, labels=['Center', 'Middle', 'Edge'])
+
+print(f"\nError rates by distance from image center:")
+for dist_cat in ['Center', 'Middle', 'Edge']:
+    subset = df[df['distance_category'] == dist_cat]
+    errors = len(subset[subset['detection_type'].isin(['unmatched_detection', 'unmatched_annotation'])])
+    total = len(subset)
+    if total > 0:
+        print(f"{dist_cat}: {errors}/{total} = {errors/total*100:.1f}% errors")
