@@ -1,3 +1,101 @@
+import pandas as pd
+
+def export_detections_to_csv(filename="all_detections.csv"):
+    """Export all loaded detections to a CSV file"""
+    
+    if not current_detections:
+        print("No detections loaded. Run create_review_plot() first.")
+        return
+    
+    # Convert detections to list of dictionaries
+    detection_records = []
+    
+    for det_id, det_info in current_detections.items():
+        data = det_info['data']
+        
+        record = {
+            'detection_id': det_id,
+            'image': current_image_stem,
+            'detection_type': det_info['type'],
+            'bbox_x_min': det_info['original_bbox'][0],
+            'bbox_y_min': det_info['original_bbox'][1], 
+            'bbox_x_max': det_info['original_bbox'][2],
+            'bbox_y_max': det_info['original_bbox'][3],
+            'bbox_width': det_info['original_bbox'][2] - det_info['original_bbox'][0],
+            'bbox_height': det_info['original_bbox'][3] - det_info['original_bbox'][1],
+            'class_id': data.get('label', 'N/A'),
+            'class_name': CLASS_MAP.get(int(data.get('label', 0)), 'unknown') if 'label' in data else 'unknown',
+            'confidence_score': data.get('score', 'N/A'),
+            'style_color': det_info['style']['color'],
+            'label_prefix': det_info['style']['label_prefix']
+        }
+        
+        # Add any other fields from the original data
+        for key, value in data.items():
+            if key not in ['bbox', 'label', 'score']:
+                record[f'extra_{key}'] = value
+                
+        detection_records.append(record)
+    
+    # Create DataFrame and save to CSV
+    df = pd.DataFrame(detection_records)
+    
+    # Sort by detection_id for easier reading
+    df = df.sort_values('detection_id')
+    
+    # Save to CSV
+    csv_path = filename
+    df.to_csv(csv_path, index=False)
+    
+    print(f"Exported {len(detection_records)} detections to: {csv_path}")
+    print(f"Columns: {list(df.columns)}")
+    
+    # Show summary statistics
+    print(f"\nDetection Type Summary:")
+    print(df['detection_type'].value_counts())
+    
+    print(f"\nClass Distribution:")
+    print(df['class_name'].value_counts())
+    
+    return df
+
+# Usage:
+df = export_detections_to_csv("fuzzy_detections.csv")
+
+# Optional: preview the data
+print("\nFirst 5 rows:")
+print(df.head())
+
+###############################################################
+
+def export_simple_detections_csv(filename="detections_simple.csv"):
+    """Export a simplified CSV with just key detection info"""
+    
+    records = []
+    for det_id, det_info in current_detections.items():
+        data = det_info['data']
+        records.append({
+            'id': det_id,
+            'type': det_info['type'],
+            'class': CLASS_MAP.get(int(data.get('label', 0)), 'unknown'),
+            'confidence': data.get('score', 'N/A'),
+            'x_min': det_info['original_bbox'][0],
+            'y_min': det_info['original_bbox'][1],
+            'x_max': det_info['original_bbox'][2], 
+            'y_max': det_info['original_bbox'][3]
+        })
+    
+    df = pd.DataFrame(records)
+    df.to_csv(filename, index=False)
+    print(f"Exported {len(records)} detections to {filename}")
+    return df
+
+# For a quick simple export:
+simple_df = export_simple_detections_csv()
+
+
+###############################################################
+
 # Step 1: Run the export after your plot
 
 # After running create_review_plot(), run this in any cell:
