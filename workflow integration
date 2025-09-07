@@ -1,0 +1,96 @@
+Workflow Integration
+Step 1: Generate your detection CSV
+pythondf = export_detections_to_csv("model_review.csv")
+Step 2: Run analysis to identify patterns
+python# Run the confidence, size, spatial, and class error analyses
+# This gives you data-driven insights to guide your manual review
+Step 3: Manual review with structured annotations
+Excel Annotation Categories
+Column A: Detection ID (auto-filled from CSV)
+Column B: Error Type (FP/FN/TP)
+Column C: Root Cause Category
+
+Localization Error (bbox wrong position/size)
+Classification Error (wrong class assigned)
+Background Confusion (non-object detected as object)
+Scale Issue (object too small/large for model)
+Occlusion (object partially hidden)
+Image Quality (blur, noise, lighting)
+Annotation Error (ground truth mistake)
+Model Limitation (edge case model can't handle)
+
+Column D: Specific Issue Description
+Examples:
+
+"Detected shadow as vehicle - dark rectangular shape"
+"Missed small aircraft - only 15x20 pixels"
+"Classified truck as tank - similar boxy shape"
+"Bbox too small - only covers 60% of actual object"
+"False alarm on building corner - geometric similarity to target"
+
+Column E: Confidence Score Assessment
+
+"High conf FP (0.85) - systematic background confusion"
+"Low conf TP (0.35) - model uncertain but correct"
+"Medium conf FN - should have been detected"
+
+Column F: Context Factors
+
+"Near image edge - partial view"
+"Dense cluster area - 8 objects within 500px"
+"Poor contrast region"
+"Unusual pose/orientation"
+"Multiple overlapping objects"
+
+Column G: Suggested Fix
+
+"Add more negative examples of this background type"
+"Augment training with smaller object scales"
+"Improve class separation between truck/tank"
+"Better bbox regression training"
+"Review annotation guidelines for this case"
+
+Column H: Priority Level
+
+High: Systematic errors affecting many detections
+Medium: Moderate frequency issues
+Low: Edge cases or rare occurrences
+
+Column I: Training Data Implications
+
+"Need more examples of this object type"
+"Insufficient negative mining for this background"
+"Class imbalance - too few tank examples"
+"Missing data augmentation for this scenario"
+
+Example Annotations
+False Positive Examples:
+ID: 42 | FP | Background Confusion | "Detected rectangular building as vehicle - similar shape/size to truck" | 0.78 conf | "Urban area with many geometric shapes" | "Add hard negative mining for rectangular buildings" | High | "Collect more urban background images"
+
+ID: 67 | FP | Image Quality | "Noise artifacts detected as small aircraft" | 0.45 conf | "Low SNR region of image" | "Improve noise filtering or confidence thresholding" | Medium | "Add noisy negative examples to training"
+False Negative Examples:
+ID: 103 | FN | Scale Issue | "Missed small vehicle - only 12x18 pixels" | N/A | "Long range detection" | "Multi-scale training with smaller anchor sizes" | High | "Augment with more small object examples"
+
+ID: 156 | FN | Occlusion | "Vehicle 70% hidden behind building" | N/A | "Urban environment with obstructions" | "Improve partial object detection capability" | Medium | "Add more partially occluded training examples"
+Analysis-Driven Review Strategy
+Use the automated analysis to guide where you spend review time:
+
+Start with high-confidence FPs - these reveal systematic model blindspots
+Review clustered errors - spatial/class patterns indicate training gaps
+Examine size extremes - very large FNs or very small objects
+Check edge cases - near image boundaries, extreme aspect ratios
+Validate low-confidence TPs - potential annotation errors
+
+Value-Added Observations
+Most valuable annotations identify:
+
+Systematic vs random errors
+Trainable vs fundamental limitations
+Data collection needs vs algorithm improvements
+Annotation quality issues vs model performance
+Environmental factors affecting detection
+Class confusion patterns requiring better feature learning
+
+Actionable insights format:
+Each observation should answer: "What specific change to training data, model architecture, or processing pipeline would prevent this error?"
+This structured approach transforms subjective review into quantified improvement roadmap for your detection model.
